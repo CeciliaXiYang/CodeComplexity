@@ -23,10 +23,7 @@ function main()
 
 }
 
-
-
 var builders = {};
-
 // Represent a reusable "class" following the Builder pattern.
 function FunctionBuilder()
 {
@@ -40,8 +37,10 @@ function FunctionBuilder()
 	this.MaxNestingDepth    = 0;
 	// The max number of conditions if one decision statement.
 	this.MaxConditions = 0;
-
-	this.returns = 0;
+	// The number of return statements in a function
+	this.Returns = 0;
+	// The max length of a message chain in a function
+	this.MaxMessageChain = 0;
 	
 	this.report = function()
 	{
@@ -53,11 +52,12 @@ function FunctionBuilder()
 				"MaxNestingDepth: {3}\t" +
 				"MaxConditions: {4}\t" +
 				"Parameters: {5}\t"+
-				"Returns: {6}\n\n"
+				"Returns: {6}\t"+
+				"Max Chain: {7}\n\n"
 			)
 			.format(this.FunctionName, this.StartLine,
 				     this.SimpleCyclomaticComplexity, this.MaxNestingDepth,
-			        this.MaxConditions, this.ParameterCount, this.returns)
+			        this.MaxConditions, this.ParameterCount, this.Returns, this.MaxMessageChain)
 		);
 	}
 };
@@ -71,7 +71,7 @@ function FileBuilder()
 	// Number of imports in a file.
 	this.ImportCount = 0;
 	// Number of conditions in a file
-	this.conditions = 0;
+	this.Conditions = 0;
 
 	this.report = function()
 	{
@@ -81,7 +81,7 @@ function FileBuilder()
 			  "ImportCount {1}\t" +
 			  "Strings {2}\t"+
 			  "Conditions {3}\n"
-			).format( this.FileName, this.ImportCount, this.Strings, this.conditions ));
+			).format( this.FileName, this.ImportCount, this.Strings, this.Conditions ));
 	}
 }
 
@@ -121,15 +121,10 @@ function complexity(filePath)
 	// Tranverse program with a function visitor.
 	traverseWithParents(ast, function (node) 
 	{
-		var literalCount = 0;
 
+		// String Usage: Number of string literals used in the file
 		if(node.type === 'Literal' && typeof node.value === 'string') {
-			fileBuilder.Strings = fileBuilder.Strings + 1;
-		}
-
-		else if (node.type === 'ReturnStatement') {
-			var builder = new FunctionBuilder();
-			builder.returns +=1;
+			fileBuilder.Strings++;
 		}
 
 		else if (node.type === 'FunctionDeclaration') 
@@ -138,18 +133,50 @@ function complexity(filePath)
 
 			builder.FunctionName = functionName(node);
 			builder.StartLine    = node.loc.start.line;
+
+			// ParameterCount: Number of parameters for function
 			builder.ParameterCount = node.params.length;
 
 			traverseWithParents(node, function (child)
 			{	
-				if (isDecision(child)) 
-				{
+				// SimpleCyclomaticComplexity : Number of if statements/loops + 1
+				if (isDecision(child)) {
 					builder.SimpleCyclomaticComplexity++;
 				}
 
-				if (isReturn(child)) 
-				{
-					builder.returns++;
+				// Returns: Number of return statements in the function
+				if (isReturn(child)) {
+					builder.Returns++;
+				}
+
+				// MaxMessageChains: Max length of a message chain in a function
+				if(child.type === 'MemberExpression') {
+					var chainLength = 2;
+					traverseWithParents(child.object, function(subChild) {
+						if(subChild.type === 'MemberExpression')
+							chainLength++;
+						builder.MaxMessageChain = Math.max(builder.MaxMessageChain, chainLength);
+
+					});
+				}
+
+				// MaxConditions: The max number of conditions inside one if statement per function
+				// Bonus Question
+				if (child.type === "IfStatement") {
+					var maxCount = 1;
+					traverseWithParents(child.test, function(subChild){
+						if(subChild.operator === '||' || subChild.operator === '&&')
+							maxCount++;
+					});
+					builder.MaxConditions = Math.max(builder.MaxConditions, maxCount);
+
+					maxCount = 1;
+					traverseWithParents(child.consequent, function(subChild){
+						if(isDecision(subChild)){
+							maxCount++;
+						}
+					});
+					builder.MaxNestingDepth = Math.max(builder.MaxNestingDepth, maxCount);
 				}
 
 			});
@@ -157,11 +184,17 @@ function complexity(filePath)
 			builders[builder.FunctionName] = builder;
 		}
 
-		else if (node.type == 'BinaryExpression') {
-			fileBuilder.conditions++;
+		// AllConditions: The total number of conditions in file
+		else if (isDecision(node)) {
+			fileBuilder.Conditions++;
+			traverseWithParents(node.test, function(child) {
+				if(child && (child.operator == '&&' || child.operator === '||'))
+						fileBuilder.Conditions++;
+			});
 		}
 
-		else if(node.type == 'CallExpression' && node.callee.name=='require') {
+		// PackageComplexity: The number of imports used in file
+		else if (node.type == 'Identifier' && node.name == 'require') {
 			fileBuilder.ImportCount++;
 		}
 
@@ -207,7 +240,6 @@ function isReturn(node)
 		return true;
 	}
 	return false;
-
 }
 
 // Helper function for printing out function name.
